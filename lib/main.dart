@@ -1,0 +1,751 @@
+import 'dart:io';
+import 'dart:convert';
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+
+void main() {
+  runApp(const SecurityEngineApp());
+}
+
+class SecurityEngineApp extends StatelessWidget {
+  const SecurityEngineApp({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      title: 'Security Recon Hub',
+      debugShowCheckedModeBanner: false,
+      theme: ThemeData(
+        brightness: Brightness.dark,
+        primaryColor: Colors.tealAccent[400],
+        scaffoldBackgroundColor: const Color(0xFF121212),
+      ),
+      home: const DashboardScreen(),
+    );
+  }
+}
+
+class DashboardScreen extends StatefulWidget {
+  const DashboardScreen({super.key});
+
+  @override
+  State<DashboardScreen> createState() => _DashboardScreenState();
+}
+
+class _DashboardScreenState extends State<DashboardScreen> {
+  final TextEditingController _urlController = TextEditingController();
+
+  // Engine State Variables
+  String targetUrl = "None";
+  String targetIp = "Pending";
+  String targetOs = "Pending Scan...";
+  String currentStatusMessage = "Idle. Awaiting target initialization.";
+
+  // Independent Process Trackers
+  bool isNslookupScanning = false;
+  bool isNmapScanning = false;
+
+  bool get isAnyEngineActive => isNslookupScanning || isNmapScanning;
+  int get activeScanTargets => isAnyEngineActive ? 1 : 0;
+
+  // Real-Time UI Dynamic Lists
+  final List<Map<String, String>> openPorts = []; 
+
+  Process? _nmapProcess;
+  final List<String> _nmapOutputLines = [];
+
+  // Static Reference Repository for System Admin & Lab Commands
+  final List<Map<String, String>> commandDatabase = const [
+    {
+      "category": "Netcat Engine",
+      "syntax": "nc -nlvp 4444",
+      "label": "Initialize Local Listener",
+      "explanation": "Spawns a local listening service on port 4444. \n-n: Suppresses DNS resolution.\n-l: Explicitly listens for incoming data streams.\n-v: Verbose output telemetry.\n-p: Specifies local communication port target."
+    },
+    {
+      "category": "Rescue & Recovery",
+      "syntax": "fsck -y /dev/sda1",
+      "label": "Repair File System Corruption",
+      "explanation": "Executes a standalone file system check and repair cycle on volume target /dev/sda1. The -y flag forces automated validation approval responses across bad sector diagnostic segments."
+    },
+    {
+      "category": "SSH Administration",
+      "syntax": "ssh -i keys.pem -o ControlMaster=auto admin@10.10.10.5",
+      "label": "Secure Authentication via Multiplexing",
+      "explanation": "Initiates a remote encrypted tunnel via identity file constraints. ControlMaster optimizations allow secondary administration terminals to clone and multiplex over the initial verified connection path without re-authenticating."
+    },
+    {
+      "category": "Bash Terminal",
+      "syntax": "python3 -c 'import pty; pty.spawn(\"/bin/bash\")'",
+      "label": "TTY Environment Upgrades",
+      "explanation": "Utilizes a localized Python module architecture to build an interactive pseudo-terminal session layer (PTY), generating clear terminal formatting parameters over standard raw input wrappers."
+    },
+    {
+      "category": "Bash Terminal",
+      "syntax": "stty raw -echo; fg; reset",
+      "label": "Interactive Hotkey Stabilization",
+      "explanation": "Alters localized terminal control characteristics to run raw inputs without terminal echo. Foregrounding and running a terminal clear cycle ensures the active layout survives automated breakout signals like Ctrl+C."
+    },
+    {
+      "category": "Rescue & Recovery",
+      "syntax": "chroot /mnt/sysimage",
+      "label": "Isolate Core Operation Environments",
+      "explanation": "Modifies root directory tracking structures for the currently calling operational process, switching execution paths to secondary staging points (/mnt/sysimage) for partition troubleshooting."
+    },
+    {
+      "category": "Netcat Engine",
+      "syntax": "nc -u -lvp 53",
+      "label": "UDP Stream Listener Initialization",
+      "explanation": "Configures netcat to spin up a listener specifically targeting incoming UDP traffic profiles on port 53 rather than standard TCP bindings."
+    },
+    {
+      "category": "Netcat Engine",
+      "syntax": "nc -w 3 -zv 10.10.10.5 20-25",
+      "label": "Zero-I/O Port Range Banner Sweep",
+      "explanation": "Executes a rapid port status probe across ports 20 through 25. The -z flag prevents data pipeline transmission, dropping connections immediately upon handshake acknowledgment, while -w defines a 3-second timeout window."
+    },
+    {
+      "category": "Bash Terminal",
+      "syntax": "script /dev/null -c /bin/bash",
+      "label": "Alternative Pseudo-Terminal Spawn",
+      "explanation": "Uses the standard system script utility to force an interactive terminal allocation (/bin/bash) targeted out to a null logger, useful when python binaries are missing from the system path."
+    },
+    {
+      "category": "Bash Terminal",
+      "syntax": "echo \$0",
+      "label": "Active Shell Environment Identification",
+      "explanation": "Queries the process tracking parameters to output the specific naming construct of the calling environment instance (e.g., /bin/bash or /bin/sh)."
+    },
+    {
+      "category": "Bash Terminal",
+      "syntax": "history -c; history -w",
+      "label": "Session Command History Purge",
+      "explanation": "Instantly flushes the active operating terminal buffer history cache (-c) and forces those adjustments to commit directly out to the configuration save files (-w) to remove local input logs."
+    },
+    {
+      "category": "SSH Administration",
+      "syntax": "ssh -N -R 8080:localhost:80 user@remote-host.com",
+      "label": "Reverse Port Forwarding Encrypted Tunnel",
+      "explanation": "Forwards connections received at port 8080 on a remote server back down to local port 80 on your test workspace machine. The -N argument suppresses the remote terminal execution route."
+    },
+    {
+      "category": "SSH Administration",
+      "syntax": "ssh -L 9000:192.168.1.50:80 user@remote-gateway.com",
+      "label": "Local Port Forwarding Encrypted Tunnel",
+      "explanation": "Binds your local system port 9000 to route securely through a middleman gateway, projecting inbound traffic across to port 80 of an internal non-public interface target."
+    },
+    {
+      "category": "SSH Administration",
+      "syntax": "ssh-keygen -R 10.10.10.5",
+      "label": "Known Host Identification Cache Invalidation",
+      "explanation": "Removes old or modified signature verification fingerprints associated with the destination address from the local user validation files, solving host verification mismatch faults."
+    },
+    {
+      "category": "Rescue & Recovery",
+      "syntax": "mount -o remount,rw /",
+      "label": "Force Live File System Re-mount to Read-Write",
+      "explanation": "Dynamically overrides localized file preservation lockups, swapping a fallback system instance back to active read-write manipulation states without shutting down standard process lifecycles."
+    },
+    {
+      "category": "Rescue & Recovery",
+      "syntax": "dd if=/dev/sda of=/mnt/backup/mbr.bak bs=512 count=1",
+      "label": "Master Boot Record Allocation Extraction",
+      "explanation": "Performs low-level sector cloning, reading exactly 512 bytes from the primary disk source block to isolate partition tables and startup instructions into a recovery backup file."
+    },
+    {
+      "category": "Rescue & Recovery",
+      "syntax": "systemd-resolve --flush-caches",
+      "label": "Systemd Internal Resolver Cleanup",
+      "explanation": "Instructs network runtime subsystems to entirely dump localized lookup tracking structures, forcing system processes to recalculate connectivity targets directly from original records."
+    },
+    {
+      "category": "System Admin",
+      "syntax": "find / -perm -4000 -type f 2>/dev/null",
+      "label": "Locate System SUID Executable Binaries",
+      "explanation": "Crawls all directory tracks looking for binary components configured to execute with root authorization rules, redirecting permission errors out of view to focus on system access maps."
+    },
+    {
+      "category": "System Admin",
+      "syntax": "ps auxf",
+      "label": "Generate Complete Hierarchical Process Map",
+      "explanation": "Renders a structural layout mapping active application processes, showing exactly how execution frames are spawned relative to parent service hierarchies."
+    },
+    {
+      "category": "System Admin",
+      "syntax": "netstat -tulnp",
+      "label": "List Local Network Listening Sockets",
+      "explanation": "Exposes active network bindings across TCP/UDP targets. Renders numeric addresses and maps active connections back to their specific system system identification codes (PID)."
+    },
+    {
+      "category": "System Admin",
+      "syntax": "journalctl -p err -n 50",
+      "label": "Filter Critical Error Log Segments",
+      "explanation": "Queries core monitoring logging engines to return the 50 most recent structural failure notices captured on the current architecture profile."
+    },
+    {
+      "category": "System Admin",
+      "syntax": "lsof -i :8080",
+      "label": "Identify Process Binds on Port Targets",
+      "explanation": "Scans system allocations to isolate exactly which service or script application holds ownership over port 8080 communication channels."
+    },
+    {
+      "category": "Network Diagnostics",
+      "syntax": "ss -altun",
+      "label": "Dump Interface Socket Connection States",
+      "explanation": "Queries interface tracking engines directly from kernel data to stream open, established, or waiting communication endpoints without looking up external host names."
+    },
+    {
+      "category": "Network Diagnostics",
+      "syntax": "traceroute -I 8.8.8.8",
+      "label": "Route Path ICMP Gateway Analysis",
+      "explanation": "Traces transit steps across internet gateways out to a target, using ICMP echo requests to log connection delays and identify paths across routing junctions."
+    },
+    {
+      "category": "Network Diagnostics",
+      "syntax": "curl -I https://www.google.com",
+      "label": "Request Remote Server Header Signatures",
+      "explanation": "Performs a raw web request to pull back metadata headers without streaming page content, showing explicit proxy tracking strings, application engine parameters, and server time signatures."
+    },
+    {
+      "category": "Network Diagnostics",
+      "syntax": "tcpdump -i eth0 -c 100 port 80",
+      "label": "Targeted Interface Packet Capture Monitor",
+      "explanation": "Monitors raw data streams traveling through interface eth0, halting tracking immediately after logging 100 packet entries bound to port 80 web traffic."
+    }
+  ];
+
+  Future<bool> checkSystemDependencies() async {
+    var nsCheck = await Process.run('which', ['nslookup']);
+    var nmapCheck = await Process.run('which', ['nmap']);
+    return nsCheck.exitCode == 0 && nmapCheck.exitCode == 0;
+  }
+
+  void startSecurityPipeline(String inputUrl) async {
+    if (inputUrl.isEmpty) return;
+
+    String hostWithPort = inputUrl.replaceAll(RegExp(r'https?://'), '').split('/').first.trim();
+    String cleanDomain = hostWithPort.contains(':') ? hostWithPort.split(':').first : hostWithPort;
+
+    setState(() {
+      isNslookupScanning = true;
+      isNmapScanning = true;
+      targetUrl = hostWithPort;
+      targetIp = "Resolving...";
+      targetOs = "Awaiting Nmap...";
+      currentStatusMessage = "Verifying operating system architectures...";
+      openPorts.clear();
+      _nmapOutputLines.clear();
+    });
+
+    bool dependenciesMet = await checkSystemDependencies();
+    if (!dependenciesMet) {
+      setState(() {
+        isNslookupScanning = false;
+        isNmapScanning = false;
+        currentStatusMessage = "CRITICAL ERROR: Tools are missing from system \$PATH.";
+      });
+      return;
+    }
+
+    // =========================================================
+    // PIPELINE STEP 1: DYNAMIC IP OR DOMAIN RESOLUTION (NSLOOKUP)
+    // =========================================================
+    setState(() => currentStatusMessage = "Resolving host network infrastructure...");
+    RegExp rawIpRegex = RegExp(r'^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$');
+    
+    if (rawIpRegex.hasMatch(cleanDomain)) {
+      setState(() {
+        targetIp = cleanDomain; 
+        isNslookupScanning = false;
+      });
+    } else {
+      try {
+        var nsResult = await Process.run('nslookup', [cleanDomain]);
+        RegExp ipRegex = RegExp(r'(?:Name:\s+\S+\s+)?Address:\s+(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})');
+        Iterable<RegExpMatch> matches = ipRegex.allMatches(nsResult.stdout.toString());
+        
+        if (matches.isNotEmpty) {
+          setState(() {
+            targetIp = matches.last.group(1)!;
+            isNslookupScanning = false; 
+          });
+        } else {
+          _abortPipeline("DNS resolution failed.");
+          return;
+        }
+      } catch (e) {
+        _abortPipeline("Error executing nslookup environment process.");
+        return;
+      }
+    }
+
+    // =========================================================
+    // PIPELINE STEP 2: NMAP WITH VERSION DETECTION (-sV)
+    // =========================================================
+    setState(() => currentStatusMessage = "Mapping ports and auditing service versions...");
+    try {
+      _nmapProcess = await Process.start('nmap', ['-sV', '-O', targetIp]);
+      
+      _nmapProcess!.stdout.transform(utf8.decoder).listen((outputChunk) {
+        for (String line in outputChunk.split('\n')) {
+          if (line.trim().isNotEmpty) {
+            _nmapOutputLines.add(line);
+            _parseLiveNmapLine(line);
+          }
+        }
+      });
+
+      _nmapProcess!.exitCode.then((code) {
+        _evaluateFinalOsSignature();
+        setState(() {
+          isNmapScanning = false;
+          currentStatusMessage = "Scan pipelines complete. Analytics processing finalized.";
+        });
+      });
+    } catch (e) {
+      setState(() {
+        isNmapScanning = false;
+        targetOs = "Nmap Execution Error";
+        currentStatusMessage = "Scan pipeline encountered an integration fault.";
+      });
+    }
+  }
+
+  void _parseLiveNmapLine(String line) {
+    RegExp portRegex = RegExp(r'^(\d+)\/(\w+)\s+(open)\s+(\S+)\s*(.*)$');
+    var match = portRegex.firstMatch(line.trim());
+
+    if (match != null) {
+      String portNum = match.group(1)!;
+      String protocol = match.group(2)!.toUpperCase();
+      String serviceName = match.group(4)!;
+      String versionDetails = match.group(5)!.trim();
+
+      setState(() {
+        openPorts.add({
+          "port": "$portNum/$protocol",
+          "service": serviceName,
+          "version": versionDetails.isEmpty ? "No explicit version signature exposed" : versionDetails
+        });
+      });
+    }
+
+    if (line.contains("OS details:") || line.contains("Aggressive OS guesses:")) {
+      setState(() {
+        targetOs = line.split(":").last.trim();
+      });
+    } else if (line.contains("Running:") || line.contains("Running (JUST GUESSING):")) {
+      setState(() {
+        targetOs = line.split(":").last.trim();
+      });
+    }
+  }
+
+  void _evaluateFinalOsSignature() {
+    if (targetOs != "Awaiting Nmap..." && targetOs != "Detecting OS...") return;
+    String compiledBuffer = _nmapOutputLines.join("\n").toLowerCase();
+    if (compiledBuffer.contains("microsoft-ds") || compiledBuffer.contains("ms-wbt-server")) {
+      setState(() => targetOs = "Windows Server Architecture");
+    } else if (compiledBuffer.contains("ssh") || compiledBuffer.contains("ubuntu") || compiledBuffer.contains("debian")) {
+      setState(() => targetOs = "Linux (Ubuntu/Debian)");
+    } else if (compiledBuffer.contains("apache") || compiledBuffer.contains("nginx")) {
+      setState(() => targetOs = "Unix Web Server Infrastructure");
+    } else {
+      setState(() => targetOs = "Unknown (Host Firewalled)");
+    }
+  }
+
+  void _abortPipeline(String message) {
+    setState(() {
+      isNslookupScanning = false;
+      isNmapScanning = false;
+      targetIp = "Failed";
+      targetOs = "Aborted";
+      currentStatusMessage = message;
+    });
+  }
+
+  void _showPortDetailModal(BuildContext context, Map<String, String> details) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF1A1A1A),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (context) {
+        return Padding(
+          padding: const EdgeInsets.all(24.0),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  const Icon(Icons.lan, color: Colors.cyanAccent, size: 24),
+                  const SizedBox(width: 12),
+                  Text("Port ${details['port']}", style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.white)),
+                ],
+              ),
+              const Divider(height: 32, color: Colors.grey),
+              const Text("SERVICE CATEGORY", style: TextStyle(fontSize: 11, color: Colors.grey, fontWeight: FontWeight.bold)),
+              const SizedBox(height: 4),
+              Text(details['service']!.toUpperCase(), style: const TextStyle(fontSize: 15, color: Colors.white, fontFamily: 'monospace')),
+              const SizedBox(height: 20),
+              const Text("NMAP BANNER VERSION DETECTION", style: TextStyle(fontSize: 11, color: Colors.grey, fontWeight: FontWeight.bold)),
+              const SizedBox(height: 4),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(color: const Color(0xFF121212), borderRadius: BorderRadius.circular(8)),
+                child: Text(
+                  details['version']!,
+                  style: TextStyle(fontSize: 13, color: Colors.tealAccent[400], fontFamily: 'monospace'),
+                ),
+              ),
+              const SizedBox(height: 16),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  // Interactive Command Details Reference Model Modal Block
+  void _showCommandExplanatoryModal(BuildContext context, Map<String, String> data) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF1A1A1A),
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (context) {
+        return Padding(
+          padding: EdgeInsets.only(
+            left: 24.0, right: 24.0, top: 24.0,
+            bottom: MediaQuery.of(context).viewInsets.bottom + 24.0
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Expanded(
+                    child: Text(
+                      data['label']!,
+                      style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white),
+                    ),
+                  ),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: Colors.tealAccent[700]!.withOpacity(0.15),
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    child: Text(
+                      data['category']!.toUpperCase(),
+                      style: TextStyle(color: Colors.tealAccent[400], fontSize: 10, fontWeight: FontWeight.bold),
+                    ),
+                  ),
+                ],
+              ),
+              const Divider(height: 24, color: Colors.grey),
+              const Text("SYNTAX EXECUTION STRUCTURE", style: TextStyle(fontSize: 11, color: Colors.grey, fontWeight: FontWeight.bold)),
+              const SizedBox(height: 8),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(color: const Color(0xFF121212), borderRadius: BorderRadius.circular(8)),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        data['syntax']!,
+                        style: const TextStyle(fontSize: 13, color: Colors.greenAccent, fontFamily: 'monospace'),
+                      ),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.copy, color: Colors.grey, size: 16),
+                      onPressed: () {
+                        Clipboard.setData(ClipboardData(text: data['syntax']!));
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('Syntax copied to clipboard'), duration: Duration(milliseconds: 600)),
+                        );
+                      },
+                    )
+                  ],
+                ),
+              ),
+              const SizedBox(height: 20),
+              const Text("TECHNICAL EXPLANATION", style: TextStyle(fontSize: 11, color: Colors.grey, fontWeight: FontWeight.bold)),
+              const SizedBox(height: 6),
+              Text(
+                data['explanation']!,
+                style: const TextStyle(fontSize: 13, color: Colors.white70, height: 1.4),
+              ),
+              const SizedBox(height: 24),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  @override
+  void dispose() {
+    _nmapProcess?.kill();
+    _urlController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: Row(
+        children: [
+          // 1. SIDEBAR NAVIGATION PANEL
+          Container(
+            width: 320,
+            color: const Color(0xFF1A1A1A),
+            padding: const EdgeInsets.all(24.0),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Icon(Icons.terminal, color: Colors.tealAccent[400], size: 28),
+                    const SizedBox(width: 10),
+                    const Text("RECON-X", style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, letterSpacing: 1.5)),
+                  ],
+                ),
+                const Divider(height: 40, color: Colors.grey),
+                const Text("TARGET URL / HOSTNAME", style: TextStyle(fontSize: 11, color: Colors.grey, fontWeight: FontWeight.bold)),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: _urlController,
+                  enabled: !isAnyEngineActive,
+                  style: const TextStyle(color: Colors.white, fontFamily: 'monospace', fontSize: 13),
+                  decoration: InputDecoration(
+                    hintText: "e.g., 10.48.152.209 or domain.com",
+                    hintStyle: const TextStyle(color: Colors.grey, fontSize: 13),
+                    filled: true,
+                    fillColor: const Color(0xFF262626),
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(8), borderSide: BorderSide.none),
+                    prefixIcon: const Icon(Icons.language, size: 18),
+                  ),
+                ),
+                const SizedBox(height: 24),
+                ElevatedButton(
+                  onPressed: isAnyEngineActive ? null : () => startSecurityPipeline(_urlController.text),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.tealAccent[700],
+                    disabledBackgroundColor: Colors.grey[800],
+                    minimumSize: const Size.fromHeight(50),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                  ),
+                  child: isAnyEngineActive 
+                    ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                    : const Text("Launch Automated Scan", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.black)),
+                ),
+                const Spacer(),
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(color: const Color(0xFF262626), borderRadius: BorderRadius.circular(8)),
+                  child: Row(
+                    children: [
+                      Icon(isAnyEngineActive ? Icons.sync : Icons.shield, color: isAnyEngineActive ? Colors.amber : Colors.green, size: 16),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          currentStatusMessage, 
+                          style: TextStyle(fontSize: 11, color: Colors.grey[300], fontFamily: 'monospace'),
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                    ],
+                  ),
+                )
+              ],
+            ),
+          ),
+          
+          // 2. MAIN CENTER METRICS AND ANALYTICS DASHBOARD PANE
+          Expanded(
+            child: Container(
+              color: const Color(0xFF121212),
+              padding: const EdgeInsets.all(32.0),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text("Security Intel Overview", style: TextStyle(fontSize: 26, fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 4),
+                  Text("Live data aggregation from local network utilities", style: TextStyle(color: Colors.grey[500], fontSize: 13)),
+                  const SizedBox(height: 24),
+
+                  Row(
+                    children: [
+                      _buildMetricCard("ACTIVE TARGETS", activeScanTargets.toString(), Icons.radar, Colors.cyanAccent),
+                      _buildMetricCard("TARGET RESOLVED IP", targetIp, Icons.dns, Colors.amberAccent),
+                      _buildMetricCard("IDENTIFIED SYSTEM OS", targetOs, Icons.fingerprint, Colors.purpleAccent),
+                    ],
+                  ),
+                  const SizedBox(height: 32),
+
+                  // TWO-COLUMN COMPOSITE WORKSPACE (NMAP SCAN & REFERENCE UTILITY LIST)
+                  Expanded(
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        // Column A: LIVE INTERACTIVE NMAP PORT MAPPING (Left Side Widget)
+                        Expanded(
+                          flex: 5,
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text("Open Port Mappings (${openPorts.length})", style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold)),
+                              const SizedBox(height: 12),
+                              Expanded(
+                                child: Container(
+                                  decoration: BoxDecoration(color: const Color(0xFF1A1A1A), borderRadius: BorderRadius.circular(8)),
+                                  padding: const EdgeInsets.all(12),
+                                  child: openPorts.isEmpty
+                                    ? _buildEmptyPlaceholder(isAnyEngineActive ? "Probing ports and banner information..." : "No open ports verified.")
+                                    : ListView.builder(
+                                        itemCount: openPorts.length,
+                                        itemBuilder: (context, index) {
+                                          var item = openPorts[index];
+                                          return InkWell(
+                                            onTap: () => _showPortDetailModal(context, item),
+                                            borderRadius: BorderRadius.circular(4),
+                                            child: Padding(
+                                              padding: const EdgeInsets.symmetric(vertical: 8.0, horizontal: 4.0),
+                                              child: Row(
+                                                children: [
+                                                  const Icon(Icons.lan, color: Colors.cyanAccent, size: 16),
+                                                  const SizedBox(width: 10),
+                                                  Text(item['port']!, style: const TextStyle(fontFamily: 'monospace', fontSize: 13, color: Colors.white, fontWeight: FontWeight.bold)),
+                                                  const Spacer(),
+                                                  Container(
+                                                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                                    decoration: BoxDecoration(color: Colors.grey[800], borderRadius: BorderRadius.circular(4)),
+                                                    child: Text(item['service']!, style: TextStyle(fontFamily: 'monospace', fontSize: 11, color: Colors.grey[300])),
+                                                  ),
+                                                  const SizedBox(width: 4),
+                                                  const Icon(Icons.chevron_right, size: 16, color: Colors.grey)
+                                                ],
+                                              ),
+                                            ),
+                                          );
+                                        },
+                                      ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(width: 24),
+
+                        // Column B: TERMINAL SYSTEMS UTILITY REFERENCE PLATFORM (Right Side Widget)
+                        Expanded(
+                          flex: 7,
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Text("Terminal Command & Lab Reference Manual", style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold)),
+                              const SizedBox(height: 12),
+                              Expanded(
+                                child: Container(
+                                  decoration: BoxDecoration(color: const Color(0xFF1A1A1A), borderRadius: BorderRadius.circular(8)),
+                                  padding: const EdgeInsets.all(12),
+                                  child: ListView.builder(
+                                    itemCount: commandDatabase.length,
+                                    itemBuilder: (context, index) {
+                                      var cmdItem = commandDatabase[index];
+                                      return Card(
+                                        color: const Color(0xFF242424),
+                                        margin: const EdgeInsets.symmetric(vertical: 6, horizontal: 2),
+                                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
+                                        child: ListTile(
+                                          onTap: () => _showCommandExplanatoryModal(context, cmdItem),
+                                          dense: true,
+                                          title: Text(
+                                            cmdItem['label']!,
+                                            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
+                                          ),
+                                          subtitle: Padding(
+                                            padding: const EdgeInsets.only(top: 4.0),
+                                            child: Text(
+                                              cmdItem['syntax']!,
+                                              style: const TextStyle(fontFamily: 'monospace', color: Colors.greenAccent, fontSize: 11),
+                                              overflow: TextOverflow.ellipsis,
+                                            ),
+                                          ),
+                                          trailing: Container(
+                                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                            decoration: BoxDecoration(
+                                              color: const Color(0xFF121212),
+                                              borderRadius: BorderRadius.circular(4),
+                                            ),
+                                            child: Text(
+                                              cmdItem['category']!,
+                                              style: TextStyle(color: Colors.grey[400], fontSize: 9, fontFamily: 'monospace'),
+                                            ),
+                                          ),
+                                        ),
+                                      );
+                                    },
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  )
+                ],
+              ),
+            ),
+          )
+        ],
+      ),
+    );
+  }
+
+  Widget _buildMetricCard(String title, String value, IconData icon, Color markerColor) {
+    return Expanded(
+      child: Card(
+        color: const Color(0xFF1A1A1A),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+        child: Padding(
+          padding: const EdgeInsets.all(20.0),
+          child: Row(
+            children: [
+              Icon(icon, color: markerColor, size: 36),
+              const SizedBox(width: 16),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(title, style: TextStyle(color: Colors.grey[500], fontSize: 11, fontWeight: FontWeight.bold, letterSpacing: 1.0)),
+                    const SizedBox(height: 6),
+                    Text(value, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.white, overflow: TextOverflow.ellipsis)),
+                  ],
+                ),
+              )
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildEmptyPlaceholder(String outputText) {
+    return Center(
+      child: Text(outputText, style: TextStyle(color: Colors.grey[600], fontStyle: FontStyle.italic, fontSize: 12)),
+    );
+  }
+}
